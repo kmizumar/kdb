@@ -15,7 +15,11 @@ const puppeteer = require('puppeteer');
         return options.map(option => option.textContent);
     });
 
-    console.log(dates);
+    for (var date of dates) {
+        if (date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+            console.log(date);
+        }
+    }
 
     await browser.close();
 })();
