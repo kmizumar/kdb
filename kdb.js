@@ -1,35 +1,104 @@
 const puppeteer = require('puppeteer');
+const fs = require('fs');
 
 const KDB_STOCKS = 'http://k-db.com/stocks/';
 const RE_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-function session_page(date, session) {
-    let tail = {
-        morning() { return '/a'; },
-        afternoon() { return '/b'; },
-        all() { return ''; }
-    };
-    return KDB_STOCKS + date + tail[session]();
+const headless = true;
+const downloadPath = './download';
+
+const session_suffix = {
+  morning() { return '/a'; },
+  afternoon() { return '/b'; },
+  all() { return ''; }
+};
+
+async function isDownloadComplete(path, filename) {
+    return new Promise((resolve, reject) => {
+        fs.readdir(path, (err, files) => {
+            if (err) {
+                reject(err);
+            }
+            else {
+                if (files.length === 0) {
+                    resolve(false);
+                    return;
+                }
+                for (let file of files) {
+                    if (/.*\.crdownload$/.test(file)) {
+                        resolve(false);
+                        return;
+                    }
+                    if (file === filename) {
+                        resolve(true);
+                        return;
+                    }
+                }
+                resolve(false);
+            }
+        });
+    });
+}
+
+async function waitDownloadComplete(path, filename, waitTimeSpanMs = 1000, timeoutMs = 60 * 1000) {
+    return new Promise((resolve, reject) => {
+        const wait = (waitTimeSpanMs, totalWaitTimeMs) => setTimeout(
+            () => isDownloadComplete(path, filename).then(
+                (completed) => {
+                    if (completed) {
+                        resolve();
+                    }
+                    else {
+                        const nextTotalTime = totalWaitTimeMs + waitTimeSpanMs;
+                        if (nextTotalTime >= timeoutMs) {
+                            reject('timeout');
+                        }
+                        const nextSpan = Math.min(
+                            waitTimeSpanMs,
+                            timeoutMs - nextTotalTime
+                        );
+                        wait(nextSpan, nextTotalTime);
+                    }
+                }
+            ).catch(
+                (err) => { reject(err); }
+            ),
+            waitTimeSpanMs
+        );
+        wait(waitTimeSpanMs, 0);
+    });
 }
 
 async function get_csv(browser, date, session) {
+    function session_page(date, session) {
+        return KDB_STOCKS + date + session_suffix[session]();
+    }
+    function filename(date, session) {
+        return 'stocks_' + date + session_suffix[session] + '.csv';
+    }
+
     const page = await browser.newPage();
+    await page._client.send(
+        'Page.setDownloadBehavior',
+        {behavior : 'allow', downloadPath: downloadPath}
+    );
     await page.goto(session_page(date, session), {waitUntil: 'networkidle'});
 
     const DOWNLOAD_LINK = '#downloadlink > a';
     await page.waitForSelector(DOWNLOAD_LINK, {visible: true});
     await page.click(DOWNLOAD_LINK, {delay: 200});
-    await page.waitForNavigation({waitUntil: 'networkidle'});
+    await waitDownloadComplete(downloadPath, filename(date, session))
+        .catch((err) => console.error(err));
     await page.close();
     return true;
 }
 
 (async () => {
     const argv = require('minimist')(process.argv.slice(2));
-    console.dir(argv);
+    // console.dir(argv);
 
     const browser = await puppeteer.launch({
-        headless: false
+        headless: headless
     });
     const page = await browser.newPage();
 
